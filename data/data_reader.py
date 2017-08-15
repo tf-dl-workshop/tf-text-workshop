@@ -6,13 +6,6 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.contrib.training import batch_sequences_with_states
 from tensorflow.contrib import learn
-from scipy.ndimage.interpolation import shift
-
-"""
-Transform list of files to list of words,
-removing new line character
-and replace name entity '<NE>...</NE>' and abbreviation '<AB>...</AB>' symbol
-"""
 
 repls = {'<NE>': '', '</NE>': '', '<AB>': '', '</AB>': ''}
 
@@ -24,7 +17,6 @@ for line in lines:
     words = map(lambda x: [word for word in x.split("|") if word not in ['', '\n']], sentence)
     words_all.extend(words)
 
-# create map of dictionary to character
 CHARS = [
     '', '\n', ' ', '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+',
     ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8',
@@ -79,7 +71,7 @@ def make_example(seq_features, labels, key):
     ex = tf.train.SequenceExample()
     # A non-sequential feature of our example
     sequence_length = len(seq_features)
-    ex.context.feature["length"].int64_list.value.append(sequence_length)
+    ex.context.feature["seq_length"].int64_list.value.append(sequence_length)
     ex.context.feature["key"].int64_list.value.append(key)
     # Feature lists for the two sequential features of our example
     fl_tokens = ex.feature_lists.feature_list["seq_feature"]
@@ -117,41 +109,38 @@ def read_and_decode_single_example(filenames, shuffle=False, num_epochs=None):
                                                               "seq_length": tf.FixedLenFeature([], dtype=tf.int64)
                                                           },
                                                           sequence_features={
-                                                              # We know the length of both fields. If not the
-                                                              # tf.VarLenFeature could be used
-                                                              "seq_feature": tf.FixedLenSequenceFeature([3],
-                                                                                                         dtype=tf.int64),
-                                                              "label": tf.FixedLenSequenceFeature([], dtype=tf.int64)
+                                                              "seq_feature": tf.VarLenFeature(dtype=tf.int64),
+                                                              "label": tf.VarLenFeature(dtype=tf.int64)
                                                           })
     return (key, context, sequences)
 
 
-key, contexts, sequences = read_and_decode_single_example(["data/_tf_records/example.tf"])
-
-initial_state_values = tf.zeros((10,), dtype=tf.float32)
-initial_states = {"lstm_state": initial_state_values}
-
-batch = batch_sequences_with_states(
-    input_key=key,
-    input_sequences=sequences,
-    input_context=contexts,
-    input_length=tf.to_int32(contexts['length']),
-    make_keys_unique=True,
-    initial_states=initial_states,
-    num_unroll=4,
-    batch_size=10,
-    num_threads=2,
-    capacity=20)
-
-words = batch.sequences["seq_feature"]
-b_k = batch.key
-
-res = learn.run_n({"words": words, "keys": b_k}, n=2, feed_dict=None)
-
-
-def idx_to_words(arr):
-    learn.run_feeds()
-    return list(map(lambda idx: ''.join(list(map(lambda x: IDX_MAP[x], idx))), arr['words']))
-
-
-list(map(lambda x: idx_to_words(x), res))
+# key, contexts, sequences = read_and_decode_single_example(["data/_tf_records/example.tf"])
+# dense_seq = {k: tf.sparse_tensor_to_dense(v) for k,v in sequences.items()}
+# initial_state_values = tf.zeros((10,), dtype=tf.float32)
+# initial_states = {"lstm_state": initial_state_values}
+#
+# batch = batch_sequences_with_states(
+#     input_key=key,
+#     input_sequences=dense_seq,
+#     input_context=contexts,
+#     input_length=tf.to_int32(contexts['seq_length']),
+#     make_keys_unique=True,
+#     initial_states=initial_states,
+#     num_unroll=4,
+#     batch_size=10,
+#     num_threads=2,
+#     capacity=20)
+#
+# words = batch.sequences["seq_feature"]
+# b_k = batch.key
+#
+# res = learn.run_n({"words": words, "keys": b_k}, n=2, feed_dict=None)
+#
+#
+# def idx_to_words(arr):
+#     learn.run_feeds()
+#     return list(map(lambda idx: ''.join(list(map(lambda x: IDX_MAP[x], idx))), arr['words']))
+#
+#
+# list(map(lambda x: idx_to_words(x), res))
