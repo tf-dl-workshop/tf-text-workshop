@@ -1,23 +1,17 @@
 import pandas as pd
+import os
 import glob
-from functools import reduce
+from functools import *
 import itertools
 import tensorflow as tf
 import numpy as np
-from tensorflow.contrib.training import batch_sequences_with_states
-from tensorflow.contrib import learn
+import random
+import re
+from multiprocessing import Pool
 
-repls = {'<NE>': '', '</NE>': '', '<AB>': '', '</AB>': ''}
+MARKS = {'<NE>': '', '</NE>': '', '<AB>': '', '</AB>': ''}
 
-words_all = []
-lines = open("data/_BEST/article/article_00001.txt", 'r')
-for line in lines:
-    line = reduce(lambda a, kv: a.replace(*kv), repls.items(), line)
-    sentence = line.split(" ")
-    words = map(lambda x: [word for word in x.split("|") if word not in ['', '\n']], sentence)
-    words_all.extend(words)
-
-CHARS = [
+ALL_CHAR = [
     '', '\n', ' ', '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+',
     ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8',
     '9', ':', ';', '<', '=', '>', '?', '@', 'A', 'B', 'C', 'D', 'E',
@@ -33,20 +27,20 @@ CHARS = [
     'ๅ', 'ๆ', '็', '่', '้', '๊', '๋', '์', 'ํ', '๐', '๑', '๒', '๓',
     '๔', '๕', '๖', '๗', '๘', '๙', '‘', '’', '\ufeff', 'other'
 ]
-CHARS_MAP = {v: k for k, v in enumerate(CHARS)}
-IDX_MAP = dict(list(enumerate(CHARS)))
-other_key = max(CHARS_MAP.values())
-class_map = {'B': 0, 'M': 1, 'E': 2, 'S': 3}
+CHARS_MAP = {v: k for k, v in enumerate(ALL_CHAR)}
+IDX_MAP = dict(list(enumerate(ALL_CHAR)))
+OTHER_KEY = max(CHARS_MAP.values())
+CLASS_MAP = {'B': 0, 'M': 1, 'E': 2, 'S': 3}
 
 
-def word_to_idx(words):
-    w_size = len(words)
-    w_idx = list(map(lambda x: CHARS_MAP.get(x, other_key), words))
+def word_to_idx(word):
+    w_size = len(word)
+    w_idx = list(map(lambda x: CHARS_MAP.get(x, OTHER_KEY), word))
     label = []
     if w_size == 1:
         label += [3]
     else:
-        label = [0] + list(np.repeat([1], w_size)) + [2]
+        label = [0] + list(np.repeat([1], w_size - 2)) + [2]
 
     return w_idx, label
 
@@ -58,12 +52,6 @@ def get_feature(tokens, k):
     for i in range(n_tokens):
         res.append(padded_tokens[i:i + k + 1])
     return res
-
-
-word_idxs = list(map(lambda s: list(map(lambda w: word_to_idx(w), s)), words_all))
-st_idx, label = map(list, zip(
-    *list(map(lambda s: tuple(map(lambda x: list(itertools.chain.from_iterable(x)), list(zip(*s)))), word_idxs))))
-input_feature = list(map(lambda x: get_feature(x, 2), st_idx))
 
 
 def make_example(seq_features, labels, key):
@@ -82,15 +70,47 @@ def make_example(seq_features, labels, key):
     return ex
 
 
-if False:
-    # Write all examples into a TFRecords file
-    with open("data/_tf_records/example.tf", 'w') as fp:
-        writer = tf.python_io.TFRecordWriter(fp.name)
-        for key, sequence in enumerate(zip(input_feature, label)):
-            seq_input, label = sequence
-            ex = make_example(seq_input, label, key)
-            writer.write(ex.SerializeToString())
-        writer.close()
+def save_to_tfrecords(data_path, output_path, type, k):
+    all_files = glob.glob(os.path.join(data_path, '*.txt'))
+    random.shuffle(all_files)
+    train_size = int(0.8 * len(all_files))
+    train = all_files[:train_size]
+    test = all_files[train_size:]
+
+    def write(files, prefix, type):
+        if not os.path.isdir(os.path.join(os.getcwd(), output_path, prefix)):
+            os.makedirs(os.path.join(output_path, prefix))
+        for file in files:
+            words_all = []
+            print(file)
+            lines = open(file, 'r', encoding='utf-8')
+            for line in lines:
+                line = reduce(lambda a, kv: a.replace(*kv), MARKS.items(), line)
+                sentence = line.split(" ")
+                words = [[word for word in s.split("|") if word not in ['', '\n']] for s in sentence]
+                words = filter(lambda x: len(x) > 0, words)
+                words_all.extend(list(words))
+            lines.close()
+            word_idxs = list(map(lambda s: list(map(lambda w: word_to_idx(w), s)), words_all))
+            st_idx, label = map(list, zip(
+                *list(
+                    map(lambda s: tuple(map(lambda x: list(itertools.chain.from_iterable(x)), list(zip(*s)))),
+                        word_idxs))))
+            input_feature = list(map(lambda x: get_feature(x, k), st_idx))
+
+            # Write all examples into a TFRecords file
+            f_name = re.search('([0-9].*).txt', file).group(1)
+
+            with open(os.path.join(output_path, prefix, type + '_' + f_name + '.tf'), 'w') as fp:
+                writer = tf.python_io.TFRecordWriter(fp.name)
+                for key, sequence in enumerate(zip(input_feature, label)):
+                    seq_input, label = sequence
+                    ex = make_example(seq_input, label, key)
+                    writer.write(ex.SerializeToString())
+                writer.close()
+
+    write(train, "train", type)
+    write(test, "test", type)
 
 
 def read_and_decode_single_example(filenames, shuffle=False, num_epochs=None):
@@ -103,7 +123,7 @@ def read_and_decode_single_example(filenames, shuffle=False, num_epochs=None):
     reader = tf.TFRecordReader()
     # One can read a single serialized example from a filename
     # serialized_example is a Tensor of type string.
-    key, serialized_ex = reader.read(filename_queue)
+    _, serialized_ex = reader.read(filename_queue)
     context, sequences = tf.parse_single_sequence_example(serialized_ex,
                                                           context_features={
                                                               "seq_length": tf.FixedLenFeature([], dtype=tf.int64)
@@ -112,35 +132,14 @@ def read_and_decode_single_example(filenames, shuffle=False, num_epochs=None):
                                                               "seq_feature": tf.VarLenFeature(dtype=tf.int64),
                                                               "label": tf.VarLenFeature(dtype=tf.int64)
                                                           })
-    return (key, context, sequences)
+    return context, sequences
 
 
-# key, contexts, sequences = read_and_decode_single_example(["data/_tf_records/example.tf"])
-# dense_seq = {k: tf.sparse_tensor_to_dense(v) for k,v in sequences.items()}
-# initial_state_values = tf.zeros((10,), dtype=tf.float32)
-# initial_states = {"lstm_state": initial_state_values}
-#
-# batch = batch_sequences_with_states(
-#     input_key=key,
-#     input_sequences=dense_seq,
-#     input_context=contexts,
-#     input_length=tf.to_int32(contexts['seq_length']),
-#     make_keys_unique=True,
-#     initial_states=initial_states,
-#     num_unroll=4,
-#     batch_size=10,
-#     num_threads=2,
-#     capacity=20)
-#
-# words = batch.sequences["seq_feature"]
-# b_k = batch.key
-#
-# res = learn.run_n({"words": words, "keys": b_k}, n=2, feed_dict=None)
-#
-#
-# def idx_to_words(arr):
-#     learn.run_feeds()
-#     return list(map(lambda idx: ''.join(list(map(lambda x: IDX_MAP[x], idx))), arr['words']))
-#
-#
-# list(map(lambda x: idx_to_words(x), res))
+def fn(cat):
+    return save_to_tfrecords("_BEST/" + cat, "_tf_records_k2", cat, 2)
+
+
+if __name__ == "__main__":
+    category = ['article', 'encyclopedia', 'news', 'novel']
+    p = Pool(4)
+    p.map(fn, category)
