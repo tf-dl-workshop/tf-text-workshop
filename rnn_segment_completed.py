@@ -9,7 +9,6 @@ from data.data_creator import *
 from utils import *
 
 tf.logging.set_verbosity(tf.logging.INFO)
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 print(tf.__version__)
 
@@ -43,8 +42,10 @@ def rnn_segment(features, targets, mode, params):
             "gradient_norm",
         ])
     pred_classes = tf.to_int32(tf.argmax(input=logits, axis=2))
-    precision = metrics.streaming_precision(tf.equal(pred_classes, 0), tf.equal(targets, 0), weights=weight_mask)
-    recall = metrics.streaming_recall(tf.equal(pred_classes, 0), tf.equal(targets, 0), weights=weight_mask)
+    pred_words = tf.logical_or(tf.equal(pred_classes, 0), tf.equal(pred_classes, 3))
+    target_words = tf.logical_or(tf.equal(targets, 0), tf.equal(targets, 3))
+    precision = metrics.streaming_precision(pred_words, target_words, weights=weight_mask)
+    recall = metrics.streaming_recall(pred_words, target_words, weights=weight_mask)
     predictions = {
         "classes": pred_classes
     }
@@ -64,8 +65,8 @@ if __name__ == "__main__":
                                 , config=learn.RunConfig(save_checkpoints_secs=30,
                                                          keep_checkpoint_max=2))
 
-    train_input_fn = data_provider("data/_tf_records_k2/train", batch_size=128)
-    test_input_fn = data_provider("data/_tf_records_k2/test", batch_size=512)
+    train_input_fn = data_provider("data/_tf_records/train", batch_size=128)
+    test_input_fn = data_provider("data/_tf_records/test", batch_size=512)
 
     validation_monitor = monitors.ValidationMonitor(input_fn=test_input_fn,
                                                     eval_steps=10,
@@ -73,7 +74,7 @@ if __name__ == "__main__":
                                                     name='validation')
 
     # rnn_model.fit(input_fn=train_input_fn, steps=1, monitors=[validation_monitor])
-    rnn_model.evaluate(input_fn=train_input_fn, steps=1)
+    rnn_model.evaluate(input_fn=test_input_fn, steps=10)
 
     text = """นางกุหลาบขายกุหลาบจำหน่ายไม้ดอกไม้ประดับ"""
     tudkum(text, rnn_model, model_params['k'])
